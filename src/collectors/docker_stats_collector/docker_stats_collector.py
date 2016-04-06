@@ -1,11 +1,17 @@
 # coding=utf-8
 
 """
-The DockerStatsCollector uses the docker stats api to collect data about docker and the containers.
+The DockerCollector uses the docker stats api to
+collect data about docker and the containers.
+
+This collector uses the container name by default.
+If labels are specified, instead of the app name, the
+label values are put to the namespace after the collector 
+path, in order.
 
 #### Dependencies
 
-* docker -- Install via `pip install docker-py`.
+* docker -- Install via `pip install docker-py`
   Source https://github.com/docker/docker-py
 """
 
@@ -13,90 +19,97 @@ import json
 import diamond.collector
 
 try:
-	import docker
+    import docker
 except ImportError:
-	docker = None
-	 
-class DockerStatsCollector(diamond.collector.Collector):
+    docker = None
 
-	# path in stats json : metric tag
-	METRICS = {
-			# memory stats
-			"memory_stats.stats.rss" : "memory.rrs",
-			"memory_stats.stats.total_rss" : "memory.total_rrs",
-			"memory_stats.stats.total_cache" : "memory.total_cache",
-			"memory_stats.stats.total_swap" : "memory.total_swap",
-			"memory_stats.stats.total_pgpgin" : "memory.total_pgpgin",
-			"memory_stats.stats.total_pgpgout" : "memory.total_pgpgout",
 
-			# cpu stats
-			"cpu_stats.cpu_usage.total_usage" : "cpu.total",
-			"cpu_stats.cpu_usage.usage_in_kernelmode" : "cpu.kernelmode",
-			"cpu_stats.cpu_usage.usage_in_usermode" : "cpu.usermode",
-			"cpu_stats.system_cpu_usage" : "cpu.system",
-	}
+class DockerCollector(diamond.collector.Collector):
 
-	def get_default_config_help(self):
-		config_help = super(DockerStatsCollector, self).get_default_config_help()
-		return config_help
+    METRICS = {
+        # memory stats
+        "memory_stats.stats.total_rss": "RSS_byte",
+        "memory_stats.stats.total_cache": "cache_byte",
+        "memory_stats.stats.total_swap": "swap_byte",
+        "memory_stats.stats.total_pgpgin": "pagein_count",
+        "memory_stats.stats.total_pgpgout": "pageout_count",
 
-	def get_default_config(self):
-		config = super(DockerStatsCollector, self).get_default_config()
-		config.update({
-			'path': 'docker_stats'
-		})
-		return config
+        # cpu stats
+        "cpu_stats.cpu_usage.total_usage": "cpu.total",
+        "cpu_stats.cpu_usage.usage_in_kernelmode": "cpu.kernelmode",
+        "cpu_stats.cpu_usage.usage_in_usermode": "cpu.usermode",
+        "cpu_stats.system_cpu_usage": "cpu.system",
+    }
 
-	def get_value(self, path, dictionary):
-		keys = path.split(".")
-		cur = dictionary
-		for key in keys:
-			if not isinstance(cur, dict):
-				raise Exception("metric path '{0}'' does not exist in docker stats output".format(path))
-			cur = cur.get(key)
-			if cur == None:
-				break
-		return cur
+    def get_default_config_help(self):
+        return super(DockerCollector, self).get_default_config_help()
 
-	def collect(self):
-		if docker is None:
-			self.log.error('Unable to import docker')
+    def get_default_config(self):
+        config = super(DockerCollector, self).get_default_config()
+        config.update({
+            'path': 'docker',
+            'labels': []
+        })
+        return config
 
-		try:
-			# Collect info
-			results = {}
-			client = docker.Client(version='auto')
+    def get_value(self, path, dictionary):
+        keys = path.split(".")
+        cur = dictionary
+        for key in keys:
+            if not isinstance(cur, dict):
+                raise Exception("metric '{0}' does not exist".format(path))
+            cur = cur.get(key)
+            if cur is None:
+                break
+        return cur
 
-			# Top level stats
-			running_containers = client.containers()
-			results['containers_running_count'] = (
-				len(running_containers), 'GAUGE')
+    def collect(self):
+        if docker is None:
+            self.log.error('Unable to import docker')
 
-			all_containers = client.containers(all=True)
-			results['containers_stopped_count'] = (
-				len(all_containers) - len(running_containers), 'GAUGE')
+        try:
+            # Collect info
+            results = {}
+            client = docker.Client(version='auto')
 
-			images_count = len(set(client.images(quiet=True)))
-			results['images_count'] = (images_count, 'GAUGE')
+            # Top level stats
+            running_containers = client.containers()
+            results['containers_running_count'] = (
+                len(running_containers), 'GAUGE')
 
-			dangling_images_count = len(set(client.images(
-				quiet=True, all=True, filters={'dangling': True})))
-			results['images_dangling_count'] = (dangling_images_count, 'GAUGE')
+            all_containers = client.containers(all=True)
+            results['containers_stopped_count'] = (
+                len(all_containers) - len(running_containers), 'GAUGE')
 
-			# Collect memory and cpu stats
-			for container in running_containers:
-				name = container['Names'][0][1:]
-				s = client.stats(container["Id"])
-				stat = json.loads(s.next())
-				for path in self.METRICS: 
-					val = self.get_value(path, stat)
-					if val is not None:
-						results[".".join([name, self.METRICS.get(path)])] = (val, 'GAUGE')
-				s.close()
+            images_count = len(set(client.images(quiet=True)))
+            results['images_count'] = (images_count, 'GAUGE')
 
-			for name in sorted(results.keys()):
-				(value, metric_type) = results[name]
-				self.publish(name, value, metric_type=metric_type)
+            dangling_images_count = len(set(client.images(
+                quiet=True, all=True, filters={'dangling': True})))
+            results['images_dangling_count'] = (dangling_images_count, 'GAUGE')
 
-		except Exception, e:
-			self.log.error(e, exc_info=True)
+            # Collect memory and cpu stats
+            for container in running_containers:
+                # build namespace from configured labels
+                values = [container['Labels'].get(l) for l in self.config['labels']]
+                namespace = ".".join([v for v in values if v is not None])
+                
+                # if namespace is empty, use container name
+                if namespace == '':
+                    namespace = container['Names'][0][1:]
+                
+                s = client.stats(container["Id"])
+                stat = json.loads(s.next())
+                for path in self.METRICS:
+                    val = self.get_value(path, stat)
+                    if val is not None:
+                        metric_key = ".".join([namespace, self.METRICS.get(path)])
+                        results[metric_key] = (val, 'GAUGE')
+                s.close()
+
+            for name in sorted(results.keys()):
+                (value, metric_type) = results[name]
+                self.publish(name, value, metric_type=metric_type)
+
+        except Exception, e:
+            self.log.error(e, exc_info=True)
