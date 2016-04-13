@@ -54,7 +54,7 @@ class FluentdCollector(diamond.collector.Collector):
         res = urllib2.urlopen(url)
         data = json.load(res)
 
-        result = self.parse_api_output(status)
+        result = self.parse_api_output(data)
         for r in result:
             self.publish(r[0], r[1])
 
