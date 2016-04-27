@@ -4,6 +4,7 @@ VERSION :=$(shell bash version.sh )
 RELEASE :=$(shell ls -1 dist/*.noarch.rpm 2>/dev/null | wc -l )
 HASH	:=$(shell git rev-parse HEAD )
 DISTRO=precise
+RELEASE_TAG?=${RELEASE}
 
 all:
 	@echo "make run      - Run Diamond from this directory"
@@ -57,7 +58,7 @@ rpm: buildrpm
 
 buildrpm: sdist
 	./setup.py bdist_rpm \
-		--release=`ls dist/*.noarch.rpm | wc -l` \
+		--release=${RELEASE_TAG} \
 		--build-requires='python, python-configobj, python-setuptools' \
 		--requires='python, python-configobj, python-setuptools'
 
@@ -93,11 +94,11 @@ tar: sdist
 
 clean:
 	./setup.py clean
-	rm -rf dist build MANIFEST .tox *.log
+	rm -rf dist build MANIFEST .tox *.log version.txt
 	find . -name '*.pyc' -delete
 
 version:
-	./version.sh > version.txt
+	./version.sh
 
 vertest: version 
 	echo "${VERSION}"
