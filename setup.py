@@ -97,7 +97,7 @@ def get_version():
     try:
         f = open('version.txt')
     except IOError:
-        os.system("./version.sh > version.txt")
+        os.system("./version.sh")
         f = open('version.txt')
     version = ''.join(f.readlines()).rstrip()
     f.close()
